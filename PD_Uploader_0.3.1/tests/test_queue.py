@@ -238,14 +238,19 @@ class FileTests(unittest.TestCase):
             e.run(retry=True)
             self.assertEqual(calls,[(j.id,2),(j.id,3)])
             self.assertEqual(e.snapshot()['done'],2);self.assertEqual(e.total,2)
-    def test_error_in_one_slot_does_not_send_partial_row(self):
+    def test_bad_slot_is_deferred_while_good_slot_uploads_once(self):
         with TemporaryDirectory() as d:
             root=Path(d);(root/'good.jpg').write_bytes(b'\xff\xd8\xfftest')
             p=root/'A.csv';p.write_text(HEADER+'yes,https://example.invalid/?siteid=1,T,D,Day,M,good.jpg,missing.jpg,,,,\n')
             j=Job.load(p);j.prepared=True
             calls=[];e=QueueEngine(lambda j,e:FakeSession(j,e,calls));e.add(j);e.run()
-            self.assertEqual(calls,[]);self.assertEqual(e.snapshot()['total'],2)
-            self.assertEqual(j.rows[0].status,'Failed')
+            self.assertEqual(calls,[(j.id,2)]);self.assertEqual(e.snapshot()['total'],2)
+            self.assertEqual(e.snapshot()['done'],1)
+            (root/'missing.jpg').write_bytes(b'\xff\xd8\xfftest')
+            e.run(retry=True)
+            self.assertEqual(calls,[(j.id,2),(j.id,2)])
+            self.assertEqual(e.snapshot()['done'],2)
+            self.assertEqual(j.rows[0].status,'Uploaded')
     def test_diagnostics_redacts_addresses_tokens_and_paths_and_journal_has_no_mapping(self):
         self.assertNotIn('example.invalid',sanitize('URL https://example.invalid/?token=abc'))
         self.assertNotIn('abc',sanitize('password=abc token=abc'))

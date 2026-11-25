@@ -1,0 +1,13 @@
+PD UPLOADER 0.3.1 — PLIKI DO WGRANIA
+
+Rozpakuj ZIP. Wgraj cały folder PD_Uploader_0.3.1 do głównego widoku obecnego repozytorium GitHub. Nie wchodź do starego folderu PD_Uploader_0.3.0.
+
+Nie usuwaj starego folderu ani zapasowego programu. Ta paczka celowo nie ma ukrytego folderu .github — nie trzeba go przeciągać.
+
+Po wgraniu trzeba przełączyć plik budowania na wersję 0.3.1. Widoczny BUILD_ON_GITHUB.yml zawiera gotową treść. Mogę dodać ją przez otwartą stronę GitHub, jak poprzednio. Samo wgranie pliku o tej nazwie do folderu aplikacji nie zmienia jeszcze starego budowania.
+
+To kod źródłowy, nie Windows EXE. Nowy EXE powstanie po uruchomieniu nowej instrukcji budowania na GitHub.
+
+Nowy interfejs jest oparty na prototypie. Ten sam przycisk: Open PD Board → I’m logged in → Start upload → Pause upload → Resume upload. Control Room jest przygotowywany dopiero po potwierdzeniu logowania i zminimalizowaniu przypisanego Edge.
+
+68 testów przeszło lokalnie. Wysyłanie do firmowej strony i rzeczywiste zachowanie Windows Edge wymagają sprawdzenia po zbudowaniu.

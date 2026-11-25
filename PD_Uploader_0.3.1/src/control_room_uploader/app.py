@@ -6,7 +6,7 @@ import threading
 import time
 from pathlib import Path
 from PySide6.QtCore import Qt, QTimer, QSignalBlocker, QSize
-from PySide6.QtGui import QColor, QIcon, QFont, QAction, QKeySequence
+from PySide6.QtGui import QColor, QIcon, QFont, QFontDatabase, QAction, QKeySequence
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QFrame, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
@@ -24,7 +24,7 @@ from .worker import BrowserWorker
 
 STYLE='''
 QMainWindow, QWidget#workspace, QWidget#footer { background: #F5F6F8; }
-QWidget { color: #20242B; font-family: "Segoe UI", "Helvetica Neue", sans-serif; font-size: 13px; }
+QWidget { color: #20242B; font-family: "Segoe UI Variable", "Segoe UI", "Helvetica Neue", sans-serif; font-size: 13px; }
 QFrame#panel { background: #FFFFFF; border: 1px solid #DADCE0; border-radius: 7px; }
 QWidget#inside, QScrollArea, QScrollArea > QWidget > QWidget { background: #FFFFFF; border: none; }
 QLabel { background: transparent; border: none; }
@@ -45,7 +45,6 @@ QPushButton#secondary, QPushButton#logToggle { background: transparent; border: 
 QPushButton#secondary:hover, QPushButton#logToggle:hover { color: #20242B; background: #ECEEF2; }
 QPushButton#tab { background: #F0F1F3; border: none; border-radius: 5px; padding: 8px 11px; }
 QPushButton#tab[selected="true"] { background: #FFF2BD; font-weight: 600; }
-QPushButton#tab[complete="true"] { color: #25834C; }
 QPushButton#addTab { background: #FFFFFF; border: 1px dashed #C6CAD0; padding: 8px 10px; }
 QTableWidget { background: #FFFFFF; alternate-background-color: #FFFFFF; border: none; outline: none; gridline-color: transparent; selection-background-color: #F2F4F7; selection-color: #20242B; }
 QTableWidget::item { border: none; padding-left: 9px; padding-right: 7px; }
@@ -74,6 +73,9 @@ class UploaderApp(QMainWindow):
         self.setWindowIcon(QIcon(str(resource_path('assets/pd.ico'))))
         self.resize(1080,550)
         self.setMinimumSize(900,510)
+        families=QFontDatabase.families()
+        family=next((f for f in ('Segoe UI Variable','Segoe UI','Helvetica Neue') if f in families),self.font().family())
+        self.setFont(QFont(family,10))
         self.setStyleSheet(STYLE)
         self.events=queue.Queue();self.tasks=queue.Queue()
         self.pool=SessionPool();self.diagnostics=Diagnostics()
@@ -222,7 +224,8 @@ class UploaderApp(QMainWindow):
             button=QPushButton(text);button.setObjectName('secondary');button.clicked.connect(callback);self.secondary_layout.addWidget(button)
         if phase in {'opening_login','awaiting_login','preparing','reauth_login','reauth_preparing'}:secondary('Back',self.engine.back)
         if phase in {'paused','blocked','reauth','reauth_login'}:
-            if s['current_id']:secondary('Skip current board',self._skip)
+            if phase=='blocked':secondary('Continue with next image',self.engine.defer_unknown)
+            elif s['current_id']:secondary('Skip current board',self._skip)
             secondary('Cancel all uploads',self._cancel)
         elif phase=='finished' and s['can_retry']:secondary('New upload',self._new)
         summary={'empty':'Ready','idle':'Awaiting login','opening_login':'Opening Edge','awaiting_login':'Awaiting login','preparing':'Preparing board',
@@ -240,7 +243,7 @@ class UploaderApp(QMainWindow):
             if item.widget():
                 item.widget().hide();item.widget().deleteLater()
         for job in jobs:
-            text=self.fontMetrics().elidedText(job.path.name,Qt.ElideRight,175)+(' ✓' if job.state=='Uploaded' else '')
+            text=self.fontMetrics().elidedText(job.path.name,Qt.ElideRight,175)
             button=TabButton(text);button.setObjectName('tab');button.setProperty('selected',job.id==self.view_id);button.setProperty('complete',job.state=='Uploaded')
             button.uploading=job.id==self.state['current_id'] and self.state['started']
             button.setToolTip(job.path.name+'\n'+job.state);button.clicked.connect(lambda checked=False,ident=job.id:self._choose_tab(ident))
@@ -261,7 +264,7 @@ class UploaderApp(QMainWindow):
         for i,state in enumerate(job.rows):
             r=state.row;status=state.status if state.selected else 'Excluded'
             if status=='Waiting' and self.state['phase']=='paused' and self.state['current_id']==job.id and self.state['current_row']==r.row_number:status='Paused'
-            values=['',str(r.row_number),r.tier,r.department,r.shift,r.metric,str(state.count),'✓ Uploaded' if status=='Uploaded' else status]
+            values=['',str(r.row_number),r.tier,r.department,r.shift,r.metric,str(state.count),status]
             tooltip=state.reason or f'Row {r.row_number}'
             for col,value in enumerate(values):
                 item=QTableWidgetItem(value);item.setToolTip(tooltip);item.setData(Qt.UserRole,r.row_number)
@@ -270,6 +273,8 @@ class UploaderApp(QMainWindow):
                     if not locked and r.enabled and state.count:flags|=Qt.ItemIsUserCheckable
                     item.setCheckState(Qt.Checked if state.selected else Qt.Unchecked)
                 item.setFlags(flags)
+                if col==7 and status=='Uploaded':
+                    font=item.font();font.setWeight(QFont.DemiBold);item.setFont(font)
                 if status in {'Uploading','Paused'}:item.setBackground(QColor('#FFF9E2'))
                 if col==7:item.setForeground(QColor('#25834C' if status=='Uploaded' else '#C62828' if status in {'Failed','Outcome unknown'} else '#806000' if status in {'Uploading','Paused'} else '#858A92'))
                 elif status in {'Excluded','Skipped','Cancelled'}:item.setForeground(QColor('#858A92'))
@@ -323,8 +328,18 @@ class UploaderApp(QMainWindow):
         if job and self.header.select_enabled:self.engine.select(job.id,None,not self.header.checked)
 
     def _tab_menu(self,button,point,ident):
-        if self.task_busy or self.state['started'] or self.state['phase'] in LOGIN_PHASES:return
-        menu=QMenu(self);action=menu.addAction('Remove from queue');action.triggered.connect(lambda:self._submit(lambda:self.engine.remove(ident)));menu.exec(button.mapToGlobal(point))
+        menu=QMenu(self)
+        if ident in self.engine.sessions:
+            action=menu.addAction('View Edge')
+            action.setEnabled(not self.closing)
+            if self.state['started'] and self.state['phase'] not in {'finished','cancelled'}:
+                action.triggered.connect(lambda:self.engine.request_view(ident))
+            else:
+                action.triggered.connect(lambda:self._submit(lambda:self.engine.sessions[ident].view()))
+        if not self.task_busy and not self.state['started'] and self.state['phase'] not in LOGIN_PHASES:
+            action=menu.addAction('Remove from queue')
+            action.triggered.connect(lambda:self._submit(lambda:self.engine.remove(ident)))
+        if not menu.isEmpty():menu.exec(button.mapToGlobal(point))
 
     def _row_menu(self,point):
         row=self.table.indexAt(point).row()
@@ -336,7 +351,7 @@ class UploaderApp(QMainWindow):
         if job is None or i<0:return
         state=job.rows[i];r=state.row
         lines=[f'Row {r.row_number} — {state.status}',state.reason or 'No diagnostic issues recorded.']
-        lines += [f'Image {n}: {p.name if p else "Not set"}' for n,p in enumerate(r.image_paths,1)]
+        lines += [f'Image {n}: {p.name if p else "Not set"} — {state.images.get(n, "Unused")}' for n,p in enumerate(r.image_paths,1)]
         QMessageBox.information(self,'Row details','\n'.join(lines))
 
     def _ask(self,title,text):

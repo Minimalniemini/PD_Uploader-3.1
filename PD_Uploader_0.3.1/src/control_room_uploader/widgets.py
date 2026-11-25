@@ -8,19 +8,19 @@ TEXT='#20242B'; MUTED='#737983'; YELLOW='#FFCC00'; GREEN='#25834C'; TINT='#FFF2B
 
 
 def draw_checkbox(painter, rect, checked, partial=False, enabled=True):
-    box=QRectF(rect.center().x()-6,rect.center().y()-6,12,12)
+    box=QRectF(rect.center().x()-7,rect.center().y()-7,14,14)
     painter.save();painter.setRenderHint(QPainter.Antialiasing)
     color=QColor('#087BF5' if checked or partial else '#FFFFFF')
     if not enabled:color.setAlpha(135 if checked or partial else 255)
     painter.setPen(QPen(color if checked or partial else QColor('#BDC2CA'),1))
-    painter.setBrush(color);painter.drawRoundedRect(box,2,2)
+    painter.setBrush(color);painter.drawRoundedRect(box,3,3)
     if checked or partial:
         painter.setPen(QPen(QColor('white'),1.6,Qt.SolidLine,Qt.RoundCap,Qt.RoundJoin))
         path=QPainterPath()
         if partial:
             path.moveTo(box.left()+3,box.center().y());path.lineTo(box.right()-3,box.center().y())
         else:
-            path.moveTo(box.left()+2.5,box.top()+6);path.lineTo(box.left()+5,box.top()+8.5);path.lineTo(box.left()+9.5,box.top()+3.5)
+            path.moveTo(box.left()+3,box.top()+7);path.lineTo(box.left()+6,box.top()+10);path.lineTo(box.left()+11,box.top()+4)
         painter.drawPath(path)
     painter.restore()
 
@@ -41,9 +41,9 @@ class ProgressRing(QWidget):
         elif self.percent:p.drawArc(circle,90*16,-int(self.percent*3.6*16))
         else:
             p.setBrush(QColor(YELLOW));p.setPen(Qt.NoPen);p.drawEllipse(QPointF(75,12),3.5,3.5)
-        font=QFont('Segoe UI');font.setPixelSize(34);font.setWeight(QFont.DemiBold)
+        font=QFont(self.font());font.setPixelSize(34);font.setWeight(QFont.DemiBold)
         p.setFont(font);p.setPen(QColor(GREEN if self.complete else TEXT))
-        p.drawText(self.rect(),Qt.AlignCenter,'✓' if self.complete else f'{self.percent}%')
+        p.drawText(self.rect(),Qt.AlignCenter,f'{self.percent}%')
 
 class TabButton(QPushButton):
     def __init__(self,text,parent=None):

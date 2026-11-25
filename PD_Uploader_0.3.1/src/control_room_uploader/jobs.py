@@ -1,6 +1,6 @@
 """Queue records independent of the selected UI tab and browser handles."""
 from __future__ import annotations
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from uuid import uuid4
 from .config import load_csv, ConfigError
@@ -26,7 +26,37 @@ class RowState:
     def set_status(self, status: str, reason: str = '') -> None:
         self.status, self.reason = status, reason
         for slot in self.images:
-            self.images[slot] = status
+            if self.images[slot] != 'Uploaded':
+                self.images[slot] = status
+
+    def upload_row(self):
+        """Validate each pending file once; retain successful slots on a later retry."""
+        paths = []
+        reasons = []
+        for slot, path in enumerate(self.row.image_paths, 1):
+            if path is None or self.images.get(slot) == 'Uploaded':
+                paths.append(None)
+                continue
+            single = replace(self.row, image_paths=tuple(path if i == slot else None for i in range(1, 7)))
+            probe = RowState(single, True, fingerprints={slot: self.fingerprints[slot]} if slot in self.fingerprints else {})
+            try:
+                probe.preflight()
+            except ConfigError as exc:
+                self.images[slot] = 'Failed'
+                reasons.append(str(exc))
+                paths.append(None)
+            else:
+                self.images[slot] = 'Uploading'
+                paths.append(path)
+        self.reason = '; '.join(reasons)
+        return replace(self.row, image_paths=tuple(paths))
+
+    def upload_complete(self):
+        for slot, status in self.images.items():
+            if status == 'Uploading':
+                self.images[slot] = 'Uploaded'
+        self.status = 'Failed' if any(s == 'Failed' for s in self.images.values()) else 'Uploaded'
+        self.safe_retry = self.status == 'Failed'
 
     def preflight(self) -> None:
         for slot, path in enumerate(self.row.image_paths, 1):

@@ -27,6 +27,7 @@ class QueueEngine:
         self.pause_requested = False
         self.cancel_requested = False
         self.skip_id: str | None = None
+        self.view_job_id: str | None = None
         self.blocked_row: RowState | None = None
         self._elapsed = 0.0
         self._clock: float | None = None
@@ -237,6 +238,24 @@ class QueueEngine:
                 self.condition.notify_all()
         self.notify()
 
+    def request_view(self, job_id):
+        with self.condition:
+            self.view_job_id = job_id
+            self.condition.notify_all()
+
+    def defer_unknown(self):
+        with self.condition:
+            if self.phase != 'blocked' or self.blocked_row is None:
+                return
+            self.blocked_row.reason = 'Deferred for review; not automatically resubmitted.'
+            self.blocked_row = None
+            self.phase = 'running'
+            self.pause_requested = False
+            self.interrupt.clear()
+            self._clock_on()
+            self.condition.notify_all()
+        self.notify()
+
     def guard_preparation(self) -> None:
         if self.shutdown.is_set() or self.interrupt.is_set():
             raise PreparationInterrupted()
@@ -263,6 +282,13 @@ class QueueEngine:
     def _gate(self, job: Job) -> bool:
         login_states = {'reauth', 'reauth_opening', 'reauth_login', 'reauth_preparing'}
         while True:
+            with self.lock:
+                view_id, self.view_job_id = self.view_job_id, None
+            if view_id in self.sessions:
+                try:
+                    self.sessions[view_id].view()
+                except Exception as exc:
+                    self.log(f'View Edge | {type(exc).__name__}')
             command = None
             with self.condition:
                 if self.cancel_requested or self.shutdown.is_set():
@@ -338,65 +364,85 @@ class QueueEngine:
             self._clock_on()
         self.notify()
         try:
-            for job in self.jobs:
-                if not job.selected_count:
-                    continue
-                self.current_id = job.id
-                job.state = 'Uploading'
-                self.notify()
-                for row in job.rows:
-                    if not row.selected or row.status != 'Waiting':
-                        continue
-                    self.current_row = row.row.row_number
-                    while row.status == 'Waiting':
-                        if not self._gate(job):
-                            break
-                        try:
-                            row.preflight()
-                            row.set_status('Uploading')
-                            self.notify()
-                            session = self._session(job)
-                            session.upload(row.row)
-                            row.set_status('Uploaded')
-                            row.safe_retry = False
-                            self.log(f'job {job.id[:8]} row {row.row.row_number} | Uploaded')
-                        except PreparationInterrupted:
-                            row.set_status('Waiting')
-                        except (ReauthenticationNeeded, TargetMismatch) as exc:
-                            row.set_status('Waiting', str(exc))
-                            job.prepared = False
-                            session = self.sessions.get(job.id)
-                            if session is not None:
-                                session.invalidate()
-                            with self.lock:
-                                self._clock_off()
-                                self.phase = 'reauth'
-                                self.message = str(exc)
-                        except (OutcomeUnknown, UploadRejected) as exc:
-                            row.set_status('Outcome unknown', str(exc))
-                            row.safe_retry = False
-                            self.blocked_row = row
-                            with self.lock:
-                                self._clock_off()
-                                self.phase = 'blocked'
-                                self.message = str(exc)
-                            self.notify()
-                            self._gate(job)
-                        except ConfigError as exc:
-                            row.set_status('Failed', str(exc))
-                            row.safe_retry = True  # No form submission has occurred.
-                        except Exception as exc:
-                            # The adapter guarantees other exceptions occur before submit.
-                            row.set_status('Failed', 'Preparation failed; no upload was submitted.')
-                            row.safe_retry = True
-                            self.log(f'job {job.id[:8]} row {row.row.row_number} | {type(exc).__name__}: {exc}')
-                        self.notify()
-                    if self.cancel_requested or self.shutdown.is_set():
-                        break
-                statuses = {r.status for r in job.rows if r.selected}
-                job.state = 'Uploaded' if statuses == {'Uploaded'} else ('Skipped' if statuses == {'Skipped'} else 'Incomplete')
+            active_job = None
+            for recovery_pass in range(2):
                 if self.cancel_requested or self.shutdown.is_set():
                     break
+                for job in self.jobs:
+                    if recovery_pass:
+                        for pending in job.rows:
+                            if pending.status == 'Failed' and pending.safe_retry:
+                                pending.set_status('Waiting')
+                                pending.safe_retry = False
+                    if not job.selected_count or not any(r.selected and r.status == 'Waiting' for r in job.rows):
+                        continue
+                    self.current_id = job.id
+                    job.state = 'Uploading'
+                    self.notify()
+                    for row in job.rows:
+                        if not row.selected or row.status != 'Waiting':
+                            continue
+                        self.current_row = row.row.row_number
+                        while row.status == 'Waiting':
+                            if not self._gate(job):
+                                break
+                            try:
+                                upload_row = row.upload_row()
+                                if any(row.row.image_paths) and not upload_row.image_count:
+                                    raise ConfigError(row.reason or 'No readable images remain in this row.')
+                                row.status = 'Uploading'
+                                if not any(row.row.image_paths):
+                                    row.set_status('Uploading')
+                                self.notify()
+                                session = self._session(job)
+                                if active_job != job.id:
+                                    if hasattr(session, 'activate'):
+                                        session.activate(upload_row)
+                                    active_job = job.id
+                                session.upload(upload_row)
+                                row.upload_complete()
+                                self.log(f'job {job.id[:8]} row {row.row.row_number} | {row.status}')
+                            except PreparationInterrupted:
+                                row.set_status('Waiting')
+                            except (ReauthenticationNeeded, TargetMismatch) as exc:
+                                row.set_status('Waiting', str(exc))
+                                active_job = None
+                                job.prepared = False
+                                session = self.sessions.get(job.id)
+                                if session is not None:
+                                    session.invalidate()
+                                with self.lock:
+                                    self._clock_off()
+                                    self.phase = 'reauth'
+                                    self.message = str(exc)
+                            except (OutcomeUnknown, UploadRejected) as exc:
+                                row.status, row.reason = 'Outcome unknown', str(exc)
+                                for slot, status in row.images.items():
+                                    if status == 'Uploading':
+                                        row.images[slot] = 'Outcome unknown'
+                                row.safe_retry = False
+                                self.blocked_row = row
+                                with self.lock:
+                                    self._clock_off()
+                                    self.phase = 'blocked'
+                                    self.message = str(exc)
+                                self.notify()
+                                self._gate(job)
+                            except ConfigError as exc:
+                                row.set_status('Failed', str(exc))
+                                row.safe_retry = True  # No form submission has occurred.
+                            except Exception as exc:
+                                # The adapter guarantees other exceptions occur before submit.
+                                row.set_status('Failed', 'Preparation failed; no upload was submitted.')
+                                row.safe_retry = True
+                                self.log(f'job {job.id[:8]} row {row.row.row_number} | {type(exc).__name__}: {exc}')
+                            self.notify()
+                        if self.cancel_requested or self.shutdown.is_set():
+                            break
+                    statuses = {r.status for r in job.rows if r.selected}
+                    job.state = 'Uploaded' if statuses == {'Uploaded'} else ('Skipped' if statuses == {'Skipped'} else 'Incomplete')
+                    if self.cancel_requested or self.shutdown.is_set():
+                        break
         finally:
             with self.lock:
                 if self.cancel_requested or self.shutdown.is_set():

@@ -167,10 +167,14 @@ class ManagedSession(ControlRoomBot):
         if self._page_has_file_inputs(page) or self._addimages_exists(page):
             return
         button = page.locator('#controlroom-button').first
-        self._wait_for_server(page, lambda: button.wait_for(state='visible', timeout=1_000),
-                              'login / Control Room button')
-        self._check_stopped()
-        button.click(timeout=10_000)
+        def landing_or_button():
+            if self._page_has_file_inputs(page) or self._addimages_exists(page):
+                return False
+            button.wait_for(state='visible', timeout=1_000)
+            return True
+        if self._wait_for_server(page, landing_or_button, 'Control Room navigation'):
+            self._check_stopped()
+            button.click(timeout=10_000)
         self._wait_for_server(page, lambda: self._wait_for_control_room_landing(page),
                               'Control Room page')
 
@@ -272,7 +276,6 @@ class ManagedSession(ControlRoomBot):
         page = self._current_page_for_run()
         origin, site = target_parts(row.page_url)
         self.expected_site = site
-        self.minimize_owned_window(page)
         if self.opened_url != row.page_url:
             self._navigate(page, row.page_url)
             self.opened_url = row.page_url
@@ -301,42 +304,47 @@ class ManagedSession(ControlRoomBot):
         if actual_origin != expected_origin or not actual_site or actual_site != self.expected_site:
             raise TargetMismatch('The page does not match the CSV destination. No images were submitted; check the managed Edge window.')
 
+    def activate(self, row):
+        page = self._current_page_for_run()
+        self._check_access_denied(page)
+        self._verify_target(page, target_parts(row.page_url)[0])
+
+    def view(self):
+        self.restore_owned_window(self._current_page_for_run())
+
     def upload(self, row):
         self.submitted = False
         try:
             page = self._current_page_for_run()
             if not self.login_approved:
                 raise ReauthenticationNeeded("Open PD Board and confirm I’m logged in before continuing.")
-            self.minimize_owned_window(page)
             if self.target != row.page_url:
                 panel = self.prepare(row)
             else:
                 self._check_access_denied(page)
-                # A login redirect needs explicit recovery rather than waiting for form controls.
-                if target_parts(page.url)[0] != target_parts(row.page_url)[0]:
-                    raise ReauthenticationNeeded('The page redirected away from the board. Resume to check login.')
-                self._verify_target(page, target_parts(row.page_url)[0])
                 panel = self._open_site_images_panel(page)
             self.engine.session_ready()
-            for attempt in range(2):
+            if self._site_images_needs_reset:
+                panel = self._reset_site_images_panel(page, row.row_number)
+            while True:
                 try:
                     self._set_row_fields(panel, page, row)
                     break
-                except SiteImagesTransientError:
-                    if attempt:
+                except BotUserError as exc:
+                    if not isinstance(exc, SiteImagesTransientError) and 'is not available after direct refresh' not in str(exc):
                         raise
+                    self._check_stopped()
+                    self.log(f'Row {row.row_number}: form not ready; refreshing before any upload.')
                     panel = self._reset_site_images_panel(page, row.row_number)
-            self.engine.validate_current_images()
             self._assign_images(panel, row)
-            self.engine.validate_current_images()
             self.engine.guard_preparation()
-            self._verify_target(page, target_parts(row.page_url)[0])
             self.engine.claim_submission()
             self.feedback.clear()
             self.awaiting_dialog = True
             # From here any exception is an unknown outcome. Never auto-replay it.
             self.submitted = True
             self._click_upload(panel, page, row.row_number)
+            self._wait_for_site_images_after_upload(page)
         except (PreparationInterrupted, ReauthenticationNeeded, TargetMismatch):
             if self.submitted:
                 raise OutcomeUnknown('Connection or session changed after Upload. Check the saved images before continuing.')

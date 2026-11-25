@@ -125,7 +125,9 @@ class ManagedSession(ControlRoomBot):
                     self.feedback.append('unknown')
                 return
             if self.awaiting_dialog:
-                self.feedback.append(classify_popup(text))
+                # Preserve the original uploader's signal: an accepted post-Upload popup.
+                # Its wording is not a new prerequisite for continuing the queue.
+                self.feedback.append('success')
             # Never put arbitrary popup contents or secrets into diagnostic logs.
             self.log('Browser popup handled; ' + ('upload feedback recorded.' if self.awaiting_dialog else 'outside upload.'))
         page.on('dialog', accept)

@@ -145,8 +145,6 @@ class UploaderApp(QMainWindow):
             self.table.setColumnWidth(i,width)
         self.header.toggle_all.connect(self._select_all)
         self.table.itemChanged.connect(self._item_changed)
-        self.table.cellDoubleClicked.connect(lambda *_:self._inspect_row())
-        self.table.setContextMenuPolicy(Qt.CustomContextMenu);self.table.customContextMenuRequested.connect(self._row_menu)
         horizontal.addWidget(right,1)
         footer=QWidget();footer.setObjectName('footer');fl=QHBoxLayout(footer);fl.setContentsMargins(0,3,0,7);fl.setSpacing(5)
         self.log_toggle=QPushButton('› Activity log');self.log_toggle.setObjectName('logToggle');self.log_toggle.clicked.connect(self._toggle_log);fl.addWidget(self.log_toggle)
@@ -351,19 +349,6 @@ class UploaderApp(QMainWindow):
         action.setEnabled(not self.task_busy and not self.state['started'] and self.state['phase'] not in LOGIN_PHASES)
         action.triggered.connect(lambda:self._submit(lambda:self.engine.remove(ident)))
         menu.popup(button.mapToGlobal(point))
-
-    def _row_menu(self,point):
-        row=self.table.indexAt(point).row()
-        if row<0:return
-        self.table.selectRow(row);menu=QMenu(self);menu.addAction('Inspect row',self._inspect_row);menu.exec(self.table.viewport().mapToGlobal(point))
-
-    def _inspect_row(self):
-        job=self._view();i=self.table.currentRow()
-        if job is None or i<0:return
-        state=job.rows[i];r=state.row
-        lines=[f'Row {r.row_number} — {state.status}',state.reason or 'No diagnostic issues recorded.']
-        lines += [f'Image {n}: {p.name if p else "Not set"} — {state.images.get(n, "Unused")}' for n,p in enumerate(r.image_paths,1)]
-        QMessageBox.information(self,'Row details','\n'.join(lines))
 
     def _ask(self,title,text):
         return QMessageBox.question(self,title,text,QMessageBox.Yes|QMessageBox.No,QMessageBox.No)==QMessageBox.Yes

@@ -34,14 +34,14 @@ class ProgressRing(QWidget):
     def paintEvent(self,event):
         p=QPainter(self);p.setRenderHint(QPainter.Antialiasing)
         circle=QRectF(12,12,126,126)
-        p.setPen(QPen(QColor('#E3E5E8'),7));p.drawEllipse(circle)
-        pen=QPen(QColor(GREEN if self.complete else YELLOW),7,Qt.SolidLine,Qt.RoundCap)
+        p.setPen(QPen(QColor('#ECEEF2'),4));p.drawEllipse(circle)
+        pen=QPen(QColor(GREEN if self.complete else YELLOW),4,Qt.SolidLine,Qt.RoundCap)
         p.setPen(pen)
         if self.complete:p.drawEllipse(circle)
         elif self.percent:p.drawArc(circle,90*16,-int(self.percent*3.6*16))
         else:
-            p.setBrush(QColor(YELLOW));p.setPen(Qt.NoPen);p.drawEllipse(QPointF(75,12),3.5,3.5)
-        font=QFont(self.font());font.setPixelSize(34);font.setWeight(QFont.DemiBold)
+            p.setBrush(QColor(YELLOW));p.setPen(Qt.NoPen);p.drawEllipse(QPointF(75,12),2,2)
+        font=QFont(self.font());font.setPixelSize(40);font.setWeight(QFont.Normal)
         p.setFont(font);p.setPen(QColor(GREEN if self.complete else TEXT))
         p.drawText(self.rect(),Qt.AlignCenter,f'{self.percent}%')
 

@@ -69,7 +69,7 @@ LOGIN_PHASES={'opening_login','awaiting_login','preparing','reauth_opening','rea
 class UploaderApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(f'PD Uploader  |  v{__version__}')
+        self.setWindowTitle('PD Uploader')
         self.setWindowIcon(QIcon(str(resource_path('assets/pd.ico'))))
         self.resize(1080,550)
         self.setMinimumSize(900,510)
@@ -246,8 +246,8 @@ class UploaderApp(QMainWindow):
             text=self.fontMetrics().elidedText(job.path.name,Qt.ElideRight,175)
             button=TabButton(text);button.setObjectName('tab');button.setProperty('selected',job.id==self.view_id);button.setProperty('complete',job.state=='Uploaded')
             button.uploading=job.id==self.state['current_id'] and self.state['started']
-            button.setToolTip(job.path.name+'\n'+job.state);button.clicked.connect(lambda checked=False,ident=job.id:self._choose_tab(ident))
-            button.setContextMenuPolicy(Qt.CustomContextMenu);button.customContextMenuRequested.connect(lambda point,b=button,ident=job.id:self._tab_menu(b,point,ident))
+            button.setToolTip(job.path.name+'\n'+job.state);button.clicked.connect(lambda checked=False,ident=job.id:self._tab_clicked(ident))
+            button.setProperty('jobId',job.id)
             self.tabs_layout.addWidget(button)
         add=QPushButton('+' if jobs else '+ Open CSV file');add.setObjectName('addTab');add.setToolTip('Open CSV file');add.setEnabled(not locked);add.clicked.connect(self._add_files);self.tabs_layout.addWidget(add)
         self.tabs_layout.addStretch(1);self.tabs_scroll.horizontalScrollBar().setValue(position)
@@ -292,6 +292,14 @@ class UploaderApp(QMainWindow):
 
     def _choose_tab(self,ident):self.view_id=ident;self._render()
 
+    def _tab_clicked(self, ident):
+        self._choose_tab(ident)
+        for i in range(self.tabs_layout.count()):
+            button = self.tabs_layout.itemAt(i).widget()
+            if button is not None and button.property('jobId') == ident:
+                self._tab_menu(button, button.rect().bottomLeft(), ident)
+                break
+
     def _add_files(self):
         if self.state['started'] or self.task_busy or self.state['phase'] in LOGIN_PHASES:return
         paths,_=QFileDialog.getOpenFileNames(self,'Open CSV file',picker_directory(),'CSV files (*.csv)')
@@ -328,7 +336,9 @@ class UploaderApp(QMainWindow):
         if job and self.header.select_enabled:self.engine.select(job.id,None,not self.header.checked)
 
     def _tab_menu(self,button,point,ident):
-        menu=QMenu(self)
+        if getattr(self, 'tab_menu', None) is not None:
+            self.tab_menu.close()
+        menu=QMenu(self);self.tab_menu=menu
         if ident in self.engine.sessions:
             action=menu.addAction('View Edge')
             action.setEnabled(not self.closing)
@@ -336,10 +346,11 @@ class UploaderApp(QMainWindow):
                 action.triggered.connect(lambda:self.engine.request_view(ident))
             else:
                 action.triggered.connect(lambda:self._submit(lambda:self.engine.sessions[ident].view()))
-        if not self.task_busy and not self.state['started'] and self.state['phase'] not in LOGIN_PHASES:
-            action=menu.addAction('Remove from queue')
-            action.triggered.connect(lambda:self._submit(lambda:self.engine.remove(ident)))
-        if not menu.isEmpty():menu.exec(button.mapToGlobal(point))
+        menu.addSeparator()
+        action=menu.addAction('Remove from queue')
+        action.setEnabled(not self.task_busy and not self.state['started'] and self.state['phase'] not in LOGIN_PHASES)
+        action.triggered.connect(lambda:self._submit(lambda:self.engine.remove(ident)))
+        menu.popup(button.mapToGlobal(point))
 
     def _row_menu(self,point):
         row=self.table.indexAt(point).row()

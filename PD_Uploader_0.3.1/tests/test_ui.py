@@ -82,4 +82,22 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(self.window.primary.text(),'Pause upload')
         e.started=False;e.phase='idle'
 
+    def test_left_click_opens_menu_without_changing_execution(self):
+        a,b=job('A.csv',(1,)),job('B.csv',(1,),10)
+        self.window.engine.add(a);self.window.engine.add(b);self.sync()
+        engine=self.window.engine
+        engine.started=True;engine.total=2;engine.current_id=a.id;engine.current_row=2;engine.phase='running'
+        engine.notify();self.sync()
+        button=self.window.tabs_layout.itemAt(1).widget()
+        QTest.mouseClick(button,Qt.LeftButton);self.qt.processEvents()
+        self.assertEqual(self.window.view_id,b.id)
+        self.assertEqual(engine.current_id,a.id)
+        self.assertEqual(engine.current_row,2)
+        self.assertEqual(engine.phase,'running')
+        self.assertFalse(engine.interrupt.is_set())
+        self.assertTrue(self.window.tab_menu.isVisible())
+        self.assertEqual(self.window.windowTitle(),'PD Uploader')
+        self.window.tab_menu.close()
+        engine.started=False;engine.phase='idle'
+
 if __name__=='__main__':unittest.main()
